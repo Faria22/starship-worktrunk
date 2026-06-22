@@ -1,0 +1,16 @@
+[package]
+name = "starship-worktrunk"
+version = "0.1.0"
+edition = "2024"
+authors = ["Faria"]
+description = "A Starship custom module that compacts Worktrunk branch suffixes in directory paths."
+license = "MIT"
+repository = "https://github.com/Faria22/starship-worktrunk"
+readme = "README.md"
+categories = ["command-line-utilities"]
+keywords = ["starship", "prompt", "worktrunk", "git", "cli"]
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"

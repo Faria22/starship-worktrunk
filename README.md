@@ -50,8 +50,8 @@ disabled = true
 [custom.worktrunk]
 command = "starship-worktrunk"
 when = true
-style = "bold cyan"
-format = "[$output]($style) "
+style = "bold cyan" # Or the value from your [directory] section.
+format = "[$output]($style) " # Or the value from your [directory] section, with $path replaced by $output.
 description = "Compacts Worktrunk branch suffixes in repo directory names"
 ```
 

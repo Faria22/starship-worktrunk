@@ -1,3 +1,7 @@
 fn main() {
-    println!("{}", starship_worktrunk::display_path());
+    let result = starship_worktrunk::render();
+    for warning in result.warnings {
+        eprintln!("starship-worktrunk: warning: {warning}");
+    }
+    println!("{}", result.output);
 }

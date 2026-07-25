@@ -41,21 +41,71 @@ cargo install --path .
 
 ## Starship Configuration
 
-Use this as a replacement for Starship's built-in directory module:
+`starship-worktrunk` reads the `[custom.worktrunk]` section from the same
+`starship.toml` file Starship uses. It supports Starship's directory path options
+and uses the same defaults when an option is omitted.
+
+To convert an existing directory module:
+
+1. Replace `$directory` with `${custom.worktrunk}` in the top-level `format`.
+   The braces are required because the custom module name contains a dot.
+2. Rename `[directory]` to `[custom.worktrunk]`.
+3. Add `command` and `when`.
+4. Change the module `format` to use `$output` instead of the directory-only
+   variables such as `$path`.
+
+For example:
 
 ```toml
-[directory]
-disabled = true
+format = """
+${custom.worktrunk}\
+$git_branch\
+$character"""
 
 [custom.worktrunk]
 command = "starship-worktrunk"
 when = true
-style = "bold cyan" # Or the value from your [directory] section.
-format = "[$output]($style) " # Or the value from your [directory] section, with $path replaced by $output.
+format = "[$output]($style) "
+style = "bold cyan"
 description = "Compacts Worktrunk branch suffixes in repo directory names"
+
+# Existing directory options can remain here.
+truncation_length = 3
+truncate_to_repo = true
+fish_style_pwd_dir_length = 0
+use_logical_path = true
+truncation_symbol = ""
+home_symbol = "~"
+use_os_path_sep = true
 ```
 
-Starship handles styling. This command only prints the display path.
+The supported directory path options are:
+
+- `truncation_length`
+- `truncate_to_repo`
+- `substitutions`, including the list and legacy table forms
+- `fish_style_pwd_dir_length`
+- `use_logical_path`
+- `read_only`
+- `truncation_symbol`
+- `home_symbol`
+- `use_os_path_sep`
+
+The executable finds the configuration using `STARSHIP_CONFIG`, then
+`XDG_CONFIG_HOME/starship.toml`, then `~/.config/starship.toml`.
+
+### Formatting limitations
+
+Starship treats a custom command's output as one value, so it cannot apply
+different styles to portions of `$output`. `repo_root_style`,
+`before_repo_root_style`, `repo_root_format`, and a non-default
+`read_only_style` therefore cannot be reproduced faithfully. If these options
+are configured, `starship-worktrunk` prints a warning to stderr and uses the
+custom module's `style` for the complete output.
+
+The custom module's own `format`, `style`, `disabled`, and `description`
+settings continue to be handled by Starship. The executable handles the display
+path and read-only symbol.
 
 ## Development
 

@@ -1,7 +1,10 @@
+use std::io::{self, Write};
+
 fn main() {
-    let result = starship_worktrunk::render();
-    for warning in result.warnings {
-        eprintln!("starship-worktrunk: warning: {warning}");
+    if let Err(error) =
+        starship_worktrunk::render().and_then(|output| io::stdout().lock().write_all(&output))
+    {
+        eprintln!("starship-worktrunk: {error}");
+        std::process::exit(1);
     }
-    println!("{}", result.output);
 }

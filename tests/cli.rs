@@ -1,156 +1,192 @@
-use std::path::Path;
-use std::process::Command;
-
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use tempfile::TempDir;
 
-fn run(command: &mut Command) {
-    let output = command.output().expect("command should run");
+fn run(command: &mut Command) -> Output {
+    let output = command
+        .output()
+        .expect("command should run (Starship must be installed)");
     assert!(
         output.status.success(),
-        "command failed with status {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    output
 }
 
-fn git(path: &Path, args: &[&str]) {
-    run(Command::new("git").args(args).current_dir(path));
+struct Fixture {
+    _temp: TempDir,
+    repo: PathBuf,
+    config: PathBuf,
 }
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_starship-worktrunk")
-}
+impl Fixture {
+    fn new(config: &str) -> Self {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("project.feature-foo");
+        std::fs::create_dir(&repo).unwrap();
+        run(Command::new("git").args(["init", "-q"]).arg(&repo));
+        run(Command::new("git")
+            .current_dir(&repo)
+            .args(["checkout", "-qb", "feature/foo"]));
+        let config_path = temp.path().join("starship.toml");
+        std::fs::write(&config_path, config).unwrap();
+        Self {
+            _temp: temp,
+            repo,
+            config: config_path,
+        }
+    }
 
-fn command_for(path: &Path, home: &Path) -> Command {
-    let mut command = Command::new(binary());
-    command
-        .current_dir(path)
-        .env("HOME", home)
-        .env_remove("STARSHIP_CONFIG")
-        .env_remove("XDG_CONFIG_HOME");
-    command
-}
+    fn command(&self, binary: &str, path: &Path) -> Command {
+        let mut cmd = Command::new(binary);
+        cmd.current_dir(path)
+            .env("PWD", path)
+            .env("STARSHIP_CONFIG", &self.config)
+            .env("STARSHIP_SHELL", "zsh")
+            .env_remove("NO_COLOR")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE");
+        cmd
+    }
 
-fn output_for(path: &Path, home: &Path) -> String {
-    let output = command_for(path, home).output().expect("binary should run");
-
-    assert!(
-        output.status.success(),
-        "binary failed with status {}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    String::from_utf8(output.stdout)
-        .expect("stdout should be utf-8")
-        .trim()
-        .to_owned()
-}
-
-#[test]
-fn compacts_repo_root_path() {
-    let temp = TempDir::new().expect("temp dir should be created");
-    let repo = temp.path().join("starship.worktrunk-support");
-    std::fs::create_dir(&repo).expect("repo dir should be created");
-    git(&repo, &["init"]);
-    git(&repo, &["checkout", "-b", "worktrunk-support"]);
-
-    assert_eq!(output_for(&repo, temp.path()), "starship");
-}
-
-#[test]
-fn compacts_nested_path() {
-    let temp = TempDir::new().expect("temp dir should be created");
-    let repo = temp.path().join("starship.feature-foo");
-    let src = repo.join("src");
-    std::fs::create_dir_all(&src).expect("nested dir should be created");
-    git(&repo, &["init"]);
-    git(&repo, &["checkout", "-b", "feature/foo"]);
-
-    assert_eq!(output_for(&src, temp.path()), "starship/src");
-}
-
-#[test]
-fn keeps_non_matching_git_repo_path() {
-    let temp = TempDir::new().expect("temp dir should be created");
-    let repo = temp.path().join("starship.worktrunk-support");
-    std::fs::create_dir(&repo).expect("repo dir should be created");
-    git(&repo, &["init"]);
-    git(&repo, &["checkout", "-b", "main"]);
-
-    assert_eq!(output_for(&repo, temp.path()), "starship.worktrunk-support");
+    fn compare(&self, path: &Path, compact: bool) {
+        let expected = run(self.command("starship", path).args(["module", "directory"])).stdout;
+        let expected = String::from_utf8(expected).unwrap();
+        let expected = if compact {
+            assert!(
+                expected.contains("project.feature-foo"),
+                "probe must exercise compaction"
+            );
+            expected.replacen("project.feature-foo", "project", 1)
+        } else {
+            expected
+        };
+        let actual = run(&mut self.command(env!("CARGO_BIN_EXE_starship-worktrunk"), path));
+        assert!(
+            actual.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&actual.stderr)
+        );
+        assert_eq!(actual.stdout, expected.as_bytes());
+    }
 }
 
 #[test]
-fn keeps_non_git_path() {
-    let temp = TempDir::new().expect("temp dir should be created");
-    let dir = temp.path().join("plain");
-    std::fs::create_dir(&dir).expect("dir should be created");
-
-    assert_eq!(output_for(&dir, temp.path()), "~/plain");
+fn delegates_directory_settings_and_preserves_ansi() {
+    for options in [
+        "",
+        "repo_root_style = 'bold red'",
+        "fish_style_pwd_dir_length = 1",
+        "truncate_to_repo = false\ntruncation_length = 0",
+        "use_logical_path = false",
+        "format = '[$path]($style)  '",
+        "substitutions = [{from='src',to='source'}]",
+    ] {
+        let fixture = Fixture::new(&format!("[directory]\n{options}\n"));
+        fixture.compare(&fixture.repo, true);
+        let src = fixture.repo.join("src");
+        std::fs::create_dir(&src).unwrap();
+        fixture.compare(&src, true);
+    }
 }
 
 #[test]
-fn reads_directory_options_from_custom_module_config() {
-    let temp = TempDir::new().expect("temp dir should be created");
-    let dir = temp.path().join("one").join("two");
-    std::fs::create_dir_all(&dir).expect("nested dir should be created");
-    let config = temp.path().join("starship.toml");
-    std::fs::write(
-        &config,
+fn preserves_substituted_output() {
+    let fixture =
+        Fixture::new("[directory]\nsubstitutions = [{from='project.feature-foo',to='icon'}]\n");
+    fixture.compare(&fixture.repo, false);
+}
+
+#[test]
+fn preserves_hidden_root_and_identical_child() {
+    let fixture = Fixture::new("[directory]\ntruncation_length = 1\n");
+    for name in ["src", "project.feature-foo"] {
+        let child = fixture.repo.join(name);
+        std::fs::create_dir(&child).unwrap();
+        fixture.compare(&child, false);
+    }
+}
+
+#[test]
+fn preserves_non_matching_branch_and_non_git_directory() {
+    let fixture = Fixture::new("");
+    run(Command::new("git")
+        .current_dir(&fixture.repo)
+        .args(["checkout", "-qb", "main"]));
+    fixture.compare(&fixture.repo, false);
+    fixture.compare(fixture._temp.path(), false);
+}
+
+#[test]
+fn preserves_detached_head() {
+    let fixture = Fixture::new("");
+    run(Command::new("git").current_dir(&fixture.repo).args([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "initial",
+    ]));
+    run(Command::new("git")
+        .current_dir(&fixture.repo)
+        .args(["checkout", "--detach"]));
+    fixture.compare(&fixture.repo, false);
+}
+
+#[test]
+fn custom_module_round_trip_keeps_styles() {
+    let fixture = Fixture::new(&format!(
         r#"
+[directory]
+repo_root_style = 'bold red'
 [custom.worktrunk]
-command = "starship-worktrunk"
+command = '"{}"'
 when = true
-format = "[$output]($style) "
-style = "bold cyan"
-truncation_length = 0
-truncate_to_repo = false
-home_symbol = "HOME"
+format = '$output '
 "#,
-    )
-    .expect("config should be written");
-
-    let output = command_for(&dir, temp.path())
-        .env("STARSHIP_CONFIG", config)
-        .output()
-        .expect("binary should run");
-
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout)
-            .expect("stdout should be utf-8")
-            .trim(),
-        "HOME/one/two"
-    );
-    assert!(output.stderr.is_empty());
+        env!("CARGO_BIN_EXE_starship-worktrunk")
+    ));
+    let direct = run(fixture
+        .command("starship", &fixture.repo)
+        .args(["module", "directory"]));
+    let expected =
+        String::from_utf8(direct.stdout)
+            .unwrap()
+            .replacen("project.feature-foo", "project", 1);
+    let nested = run(fixture
+        .command("starship", &fixture.repo)
+        .args(["module", "custom.worktrunk"]));
+    assert_eq!(nested.stdout, expected.as_bytes());
 }
 
+#[cfg(unix)]
 #[test]
-fn warns_for_unsupported_independent_styles() {
-    let temp = TempDir::new().expect("temp dir should be created");
-    let config = temp.path().join("starship.toml");
-    std::fs::write(
-        &config,
-        r#"
-[custom.worktrunk]
-command = "starship-worktrunk"
-when = true
-format = "[$output]($style) "
-repo_root_style = "bold red"
-truncation_lenght = 8
-"#,
-    )
-    .expect("config should be written");
-
-    let output = command_for(temp.path(), temp.path())
-        .env("STARSHIP_CONFIG", config)
-        .output()
-        .expect("binary should run");
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
-
-    assert!(output.status.success());
-    assert!(stderr.contains("repo_root_style cannot be applied independently"));
-    assert!(stderr.contains("unsupported option `truncation_lenght`"));
+fn reports_missing_or_failing_starship() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("");
+    let bin = fixture._temp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let invoke = || {
+        fixture
+            .command(env!("CARGO_BIN_EXE_starship-worktrunk"), &fixture.repo)
+            .env("PATH", &bin)
+            .output()
+            .unwrap()
+    };
+    let missing = invoke();
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+    let fake = bin.join("starship");
+    std::fs::write(&fake, "#!/bin/sh\necho failed >&2\nexit 7\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let failed = invoke();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("failed"));
 }

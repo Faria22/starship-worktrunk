@@ -13,17 +13,17 @@ Inside a repo directory named `starship.worktrunk-support` on branch
 `worktrunk-support`, the command prints:
 
 ```text
-/path/to/starship
+starship
 ```
 
 Inside `starship.feature-foo/src` on branch `feature/foo`, it prints:
 
 ```text
-/path/to/starship/src
+starship/src
 ```
 
 In non-matching repos, detached HEAD states, or directories that are not git
-repos, it prints the current directory unchanged.
+repos, it preserves Starship’s directory output.
 
 ## Install
 
@@ -41,71 +41,59 @@ cargo install --path .
 
 ## Starship Configuration
 
-`starship-worktrunk` reads the `[custom.worktrunk]` section from the same
-`starship.toml` file Starship uses. It supports Starship's directory path options
-and uses the same defaults when an option is omitted.
-
-To convert an existing directory module:
-
-1. Replace `$directory` with `${custom.worktrunk}` in the top-level `format`.
-   The braces are required because the custom module name contains a dot.
-2. Rename `[directory]` to `[custom.worktrunk]`.
-3. Add `command` and `when`.
-4. Change the module `format` to use `$output` instead of the directory-only
-   variables such as `$path`.
-
-For example:
+Requires `starship` and `git` on `PATH`. Keep your existing `[directory]` settings
+and replace `$directory` with `${custom.worktrunk}` in your top-level `format`
+(and `right_format` if applicable). Use an explicit module list if you previously
+used `$all`, so the built-in directory is not also displayed.
 
 ```toml
 format = """
 ${custom.worktrunk}\
 $git_branch\
+$git_status\
 $character"""
+
+[directory]
+style = "bold cyan"
+truncation_length = 3
+truncate_to_repo = true
+read_only = "🔒"
+repo_root_style = "bold blue"
 
 [custom.worktrunk]
 command = "starship-worktrunk"
 when = true
-format = "[$output]($style) "
-style = "bold cyan"
-description = "Compacts Worktrunk branch suffixes in repo directory names"
-
-# Existing directory options can remain here.
-truncation_length = 3
-truncate_to_repo = true
-fish_style_pwd_dir_length = 0
-use_logical_path = true
-truncation_symbol = ""
-home_symbol = "~"
-use_os_path_sep = true
+format = "$output "
 ```
 
-The supported directory path options are:
+Keep `[directory]` enabled. Its formatting, colors, substitutions, and other
+settings are handled by your installed Starship. The custom module passes through
+that styled output, so it does not need its own `style`.
 
-- `truncation_length`
-- `truncate_to_repo`
-- `substitutions`, including the list and legacy table forms
-- `fish_style_pwd_dir_length`
-- `use_logical_path`
-- `read_only`
-- `truncation_symbol`
-- `home_symbol`
-- `use_os_path_sep`
+The executable invokes `starship module directory` with the existing environment,
+including `STARSHIP_CONFIG`. It does not parse configuration or reproduce
+Starship's directory defaults. In a matching worktree it removes the branch suffix
+from an identifiable repository name in the rendered output.
 
-The executable finds the configuration using `STARSHIP_CONFIG`, then
-`XDG_CONFIG_HOME/starship.toml`, then `~/.config/starship.toml`.
+### Best-effort compaction
 
-### Formatting limitations
+Only the default `repo.sanitized-branch` naming convention is supported (`/` and
+`\` in branch names become `-`). Detached HEAD, non-matching directories, and
+non-Git directories retain Starship's output.
 
-Starship treats a custom command's output as one value, so it cannot apply
-different styles to portions of `$output`. `repo_root_style`,
-`before_repo_root_style`, `repo_root_format`, and a non-default
-`read_only_style` therefore cannot be reproduced faithfully. If these options
-are configured, `starship-worktrunk` prints a warning to stderr and uses the
-custom module's `style` for the complete output.
+Compaction leaves output unchanged when the name is substituted away, split by
+styling, repeated, or not clearly delimited. It also declines compaction when
+ancestor or descendant path components contain the same name, since truncation
+could otherwise cause a child directory to be mistaken for the repository root.
+Arbitrary custom formats are not interpreted; literal text that looks exactly like
+a standalone repository name can still be indistinguishable from the real name.
 
-The custom module's own `format`, `style`, `disabled`, and `description`
-settings continue to be handled by Starship. The executable handles the display
-path and read-only symbol.
+The executable preserves output bytes and adds no newline. Starship custom modules
+trim surrounding whitespace; `format = "$output "` restores the usual trailing
+space. Adjust that custom format if your prompt needs different spacing.
+
+This adds one Starship process and Git discovery per prompt. Missing or failing
+Starship produces an error on stderr and a nonzero exit status.
 
 ## Development
 
@@ -115,6 +103,7 @@ Run the project locally:
 cargo run
 ```
 
+Install Starship before running integration tests (CI uses 1.26.0).
 Run the checks used by CI:
 
 ```sh

@@ -43,7 +43,7 @@ impl Fixture {
         cmd.current_dir(path)
             .env("PWD", path)
             .env("STARSHIP_CONFIG", &self.config)
-            .env("STARSHIP_SHELL", "zsh")
+            .env("STARSHIP_SHELL", if cfg!(windows) { "cmd" } else { "sh" })
             .env_remove("NO_COLOR")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE");
@@ -142,7 +142,9 @@ fn preserves_detached_head() {
 #[test]
 fn custom_module_round_trip_keeps_styles() {
     let fixture = Fixture::new(&format!(
+        // Allow debug builds under parallel test load to exceed the prompt default.
         r#"
+command_timeout = 5000
 [directory]
 repo_root_style = 'bold red'
 [custom.worktrunk]
@@ -162,7 +164,12 @@ format = '$output '
     let nested = run(fixture
         .command("starship", &fixture.repo)
         .args(["module", "custom.worktrunk"]));
-    assert_eq!(nested.stdout, expected.as_bytes());
+    assert_eq!(
+        nested.stdout,
+        expected.as_bytes(),
+        "{}",
+        String::from_utf8_lossy(&nested.stderr)
+    );
 }
 
 #[cfg(unix)]

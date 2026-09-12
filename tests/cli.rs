@@ -77,7 +77,6 @@ fn delegates_directory_settings_and_preserves_ansi() {
     for options in [
         "",
         "repo_root_style = 'bold red'",
-        "fish_style_pwd_dir_length = 1",
         "truncate_to_repo = false\ntruncation_length = 0",
         "use_logical_path = false",
         "format = '[$path]($style)  '",
@@ -88,6 +87,53 @@ fn delegates_directory_settings_and_preserves_ansi() {
         let src = fixture.repo.join("src");
         std::fs::create_dir(&src).unwrap();
         fixture.compare(&src, true);
+    }
+}
+
+#[test]
+fn delegates_fish_style_shortening_independently_of_shell() {
+    let mut fixture = Fixture::new(
+        "[directory]\nfish_style_pwd_dir_length = 1\nformat = '$path'\nuse_os_path_sep = false\n",
+    );
+    let home = fixture._temp.path().canonicalize().unwrap();
+    let parent = home.join("development").join("projects");
+    std::fs::create_dir_all(&parent).unwrap();
+    let repo = parent.join("project.feature-foo");
+    std::fs::rename(&fixture.repo, &repo).unwrap();
+    fixture.repo = repo;
+    let src = fixture.repo.join("src");
+    std::fs::create_dir(&src).unwrap();
+
+    // Fish-style shortening is a directory setting, not a fish-only shell feature.
+    // Calling `module directory` does not launch the selected shell.
+    for shell in [if cfg!(windows) { "cmd" } else { "sh" }, "fish"] {
+        for path in [&fixture.repo, &src] {
+            let suffix = if path == &src { "/src" } else { "" };
+            for (binary, name) in [
+                ("starship", "project.feature-foo"),
+                (env!("CARGO_BIN_EXE_starship-worktrunk"), "project"),
+            ] {
+                let mut command = fixture.command(binary, path);
+                command
+                    .env("STARSHIP_SHELL", shell)
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home);
+                if binary == "starship" {
+                    command.args(["module", "directory"]);
+                }
+                let output = run(&mut command);
+                assert!(
+                    output.stderr.is_empty(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    output.stdout,
+                    format!("~/d/p/{name}{suffix}").as_bytes(),
+                    "{binary} with STARSHIP_SHELL={shell}",
+                );
+            }
+        }
     }
 }
 

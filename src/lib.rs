@@ -1,146 +1,128 @@
+use regex::Regex;
 use std::env;
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitContext {
-    pub root: PathBuf,
-    pub branch: String,
-}
-
-pub fn display_path() -> String {
-    let cwd = match env::current_dir() {
-        Ok(path) => path,
-        Err(_) => return String::new(),
-    };
-
-    display_path_for(&cwd, discover_git_context(&cwd).as_ref())
-}
-
-pub fn display_path_for(cwd: &Path, git: Option<&GitContext>) -> String {
-    let Some(git) = git else {
-        return path_to_string(cwd);
-    };
-
-    compact_worktrunk_path(cwd, &git.root, &git.branch).unwrap_or_else(|| path_to_string(cwd))
-}
-
-pub fn compact_worktrunk_path(cwd: &Path, repo_root: &Path, branch: &str) -> Option<String> {
-    let suffix = format!(".{}", sanitize_branch_name(branch));
-    let repo_name = repo_root.file_name()?.to_string_lossy();
-    let compacted_repo_name = repo_name.strip_suffix(&suffix)?;
-
-    if compacted_repo_name.is_empty() {
-        return None;
+/// Render with the installed Starship, inheriting its configuration and environment.
+pub fn render() -> io::Result<Vec<u8>> {
+    let output = Command::new("starship")
+        .args(["module", "directory"])
+        .stderr(Stdio::inherit())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "starship module directory exited with {}",
+            output.status
+        )));
     }
-
-    let relative_path = cwd.strip_prefix(repo_root).ok()?;
-    let mut compacted_path = repo_root.to_path_buf();
-    compacted_path.set_file_name(compacted_repo_name);
-    if !relative_path.as_os_str().is_empty() {
-        compacted_path.push(relative_path);
+    let mut rendered = output.stdout;
+    if let (Ok(cwd), Ok(text)) = (env::current_dir(), std::str::from_utf8(&rendered))
+        && let Some((name, compact)) = worktree_name(&cwd)
+        && let Some(result) = compact_rendered(text, &name, &compact)
+    {
+        rendered = result.into_bytes();
     }
-
-    Some(path_to_string(&compacted_path))
+    Ok(rendered)
 }
 
-pub fn sanitize_branch_name(branch: &str) -> String {
-    branch.replace(['/', '\\'], "-")
-}
-
-fn discover_git_context(cwd: &Path) -> Option<GitContext> {
-    let root = git_output(cwd, ["rev-parse", "--show-toplevel"])?;
-
-    let branch = match git_output(cwd, ["branch", "--show-current"]) {
-        Some(branch) if !branch.is_empty() => branch,
-        _ => git_output(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
-            .filter(|branch| !branch.is_empty() && branch != "HEAD")?,
-    };
-
-    Some(GitContext {
-        root: PathBuf::from(root),
-        branch,
-    })
-}
-
-fn git_output<const N: usize, S>(cwd: &Path, args: [S; N]) -> Option<String>
-where
-    S: AsRef<OsStr>,
-{
+fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
         .output()
         .ok()?;
-
     if !output.status.success() {
         return None;
     }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    Some(stdout.trim().to_owned())
+    // Remove Git's line terminator, not whitespace belonging to a path.
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|s| s.strip_suffix('\n').unwrap_or(&s).to_owned())
 }
 
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+fn worktree_name(cwd: &Path) -> Option<(String, String)> {
+    let root = git_output(cwd, &["rev-parse", "--show-toplevel"])?;
+    let root = Path::new(&root);
+    let branch = git_output(cwd, &["branch", "--show-current"])?;
+    if branch.is_empty() {
+        return None;
+    }
+    let name = root.file_name()?.to_str()?;
+    let suffix = format!(".{}", branch.replace(['/', '\\'], "-"));
+    let compact = name.strip_suffix(&suffix)?;
+    if compact.is_empty() || name.chars().any(char::is_control) {
+        return None;
+    }
+    let relative = cwd.strip_prefix(root).ok()?;
+    // A truncated child or a visible ancestor could otherwise be mistaken for the root.
+    if relative
+        .components()
+        .any(|part| part.as_os_str().to_string_lossy().contains(name))
+        || root
+            .parent()?
+            .components()
+            .any(|part| part.as_os_str().to_string_lossy().contains(name))
+    {
+        return None;
+    }
+    Some((name.to_owned(), compact.to_owned()))
+}
+
+/// Only replace one intact, delimited name. Keep ANSI styling byte-for-byte.
+/// This deliberately declines ambiguous output rather than interpreting Starship config.
+fn compact_rendered(rendered: &str, name: &str, compact: &str) -> Option<String> {
+    let ansi = Regex::new(r"\x1b\[[0-9;:]*m").expect("valid SGR regex");
+    let visible = ansi.replace_all(rendered, "");
+    let mut matches = visible.match_indices(name);
+    let (start, _) = matches.next()?;
+    if matches.next().is_some() || rendered.matches(name).count() != 1 {
+        return None;
+    }
+    let before = visible[..start].chars().next_back();
+    let after = visible[start + name.len()..].chars().next();
+    let boundary = |c: char| c.is_whitespace() || c == '/' || c == '\\';
+    if before.is_some_and(|c| !boundary(c)) || after.is_some_and(|c| !boundary(c) && c != '🔒') {
+        return None;
+    }
+    Some(rendered.replacen(name, compact, 1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn path(parts: &[&str]) -> PathBuf {
-        parts.iter().collect()
-    }
-
     #[test]
-    fn sanitizes_branch_name() {
-        assert_eq!(sanitize_branch_name("feature/foo"), "feature-foo");
-        assert_eq!(sanitize_branch_name(r"feature\foo"), "feature-foo");
-        assert_eq!(sanitize_branch_name("bug.fix_123"), "bug.fix_123");
-    }
-
-    #[test]
-    fn compacts_matching_repo_suffix() {
-        let repo_root = path(&["tmp", "starship.worktrunk-support"]);
-        let actual = compact_worktrunk_path(&repo_root, &repo_root, "worktrunk-support");
-
-        assert_eq!(actual, Some(path_to_string(&path(&["tmp", "starship"]))));
-    }
-
-    #[test]
-    fn compacts_nested_path() {
-        let repo_root = path(&["tmp", "starship.feature-foo"]);
-        let cwd = repo_root.join("src").join("module");
-        let actual = compact_worktrunk_path(&cwd, &repo_root, "feature/foo");
-
+    fn preserves_root_and_path_styles_and_spacing() {
+        let text = "\x1b[31mproject.topic\x1b[0m\x1b[36m/src\x1b[0m ";
         assert_eq!(
-            actual,
-            Some(path_to_string(&path(&["tmp", "starship", "src", "module"])))
+            compact_rendered(text, "project.topic", "project").unwrap(),
+            "\x1b[31mproject\x1b[0m\x1b[36m/src\x1b[0m "
         );
     }
 
     #[test]
-    fn does_not_compact_non_matching_suffix() {
-        let repo_root = path(&["tmp", "starship.worktrunk-support"]);
-        let actual = compact_worktrunk_path(&repo_root, &repo_root, "other-branch");
-
-        assert_eq!(actual, None);
+    fn declines_ambiguous_or_transformed_names() {
+        for text in [
+            "project.topic/project.topic",
+            "other-project.topic",
+            "project.topic-extra",
+            "icon/src",
+            "project.\x1b[31mtopic",
+        ] {
+            assert_eq!(
+                compact_rendered(text, "project.topic", "project"),
+                None,
+                "{text}"
+            );
+        }
     }
 
     #[test]
-    fn does_not_compact_branch_name_prefix() {
-        let repo_root = path(&["tmp", "starship.worktrunk-support-extra"]);
-        let actual = compact_worktrunk_path(&repo_root, &repo_root, "worktrunk-support");
-
-        assert_eq!(actual, None);
-    }
-
-    #[test]
-    fn display_path_falls_back_without_git_context() {
-        let cwd = path(&["tmp", "starship.worktrunk-support"]);
-
-        assert_eq!(display_path_for(&cwd, None), path_to_string(&cwd));
+    fn supports_unicode_and_read_only_marker() {
+        assert_eq!(
+            compact_rendered("项目.topic🔒 ", "项目.topic", "项目").unwrap(),
+            "项目🔒 "
+        );
     }
 }

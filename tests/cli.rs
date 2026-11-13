@@ -43,6 +43,8 @@ impl Fixture {
         cmd.current_dir(path)
             .env("PWD", path)
             .env("STARSHIP_CONFIG", &self.config)
+            .env("STARSHIP_CACHE", self._temp.path())
+            .env("TERM", "xterm-256color")
             .env("STARSHIP_SHELL", if cfg!(windows) { "cmd" } else { "sh" })
             .env_remove("NO_COLOR")
             .env_remove("GIT_DIR")
@@ -186,13 +188,17 @@ fn preserves_detached_head() {
 }
 
 #[test]
-fn custom_module_round_trip_keeps_styles() {
+fn custom_prompt_preserves_colors_home_and_repo_truncation() {
     let fixture = Fixture::new(&format!(
-        // Allow debug builds under parallel test load to exceed the prompt default.
+        // Exercise the full prompt, including each shell's non-printing ANSI wrappers.
         r#"
 command_timeout = 5000
+format = '${{custom.worktrunk}}'
+add_newline = false
 [directory]
-repo_root_style = 'bold red'
+style = 'bold cyan'
+truncate_to_repo = true
+truncation_length = 3
 [custom.worktrunk]
 command = '"{}"'
 when = true
@@ -200,22 +206,79 @@ format = '$output '
 "#,
         env!("CARGO_BIN_EXE_starship-worktrunk")
     ));
-    let direct = run(fixture
-        .command("starship", &fixture.repo)
-        .args(["module", "directory"]));
-    let expected =
-        String::from_utf8(direct.stdout)
+    let home = fixture._temp.path().canonicalize().unwrap();
+    let documents = home.join("documents");
+    let src = fixture.repo.join("src");
+    let deep = src.join("one/two/three");
+    std::fs::create_dir(&documents).unwrap();
+    std::fs::create_dir_all(&deep).unwrap();
+    let builtin_config = home.join("builtin.toml");
+    std::fs::write(
+        &builtin_config,
+        std::fs::read_to_string(&fixture.config)
             .unwrap()
-            .replacen("project.feature-foo", "project", 1);
-    let nested = run(fixture
-        .command("starship", &fixture.repo)
-        .args(["module", "custom.worktrunk"]));
+            .replace("${custom.worktrunk}", "$directory"),
+    )
+    .unwrap();
+
+    let shells: &[&str] = if cfg!(windows) {
+        &["cmd"]
+    } else {
+        &["sh", "bash", "zsh"]
+    };
+    for shell in shells {
+        for (path, visible) in [
+            (&home, "~"),
+            (&documents, "~/documents"),
+            (&fixture.repo, "project"),
+            (&src, "project/src"),
+            (&deep, "one/two/three"),
+        ] {
+            let prompt = |config: &Path| {
+                run(fixture
+                    .command("starship", path)
+                    .env("STARSHIP_SHELL", shell)
+                    .env("STARSHIP_CONFIG", config)
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .arg("prompt"))
+            };
+            let expected = String::from_utf8(prompt(&builtin_config).stdout)
+                .unwrap()
+                .replacen("project.feature-foo", "project", 1);
+            let actual = prompt(&fixture.config);
+            assert!(
+                actual.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&actual.stderr)
+            );
+            assert_eq!(
+                actual.stdout,
+                expected.as_bytes(),
+                "{shell} at {}",
+                path.display()
+            );
+            assert!(expected.contains("\x1b[1;36m"), "must exercise ANSI colors");
+            assert!(
+                expected.contains(visible),
+                "must render {visible}: {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn version_does_not_require_starship_or_a_repository() {
+    let temp = TempDir::new().unwrap();
+    let output = run(Command::new(env!("CARGO_BIN_EXE_starship-worktrunk"))
+        .current_dir(temp.path())
+        .env("PATH", temp.path())
+        .arg("--version"));
     assert_eq!(
-        nested.stdout,
-        expected.as_bytes(),
-        "{}",
-        String::from_utf8_lossy(&nested.stderr)
+        output.stdout,
+        concat!("starship-worktrunk ", env!("CARGO_PKG_VERSION"), "\n").as_bytes()
     );
+    assert!(output.stderr.is_empty());
 }
 
 #[cfg(unix)]

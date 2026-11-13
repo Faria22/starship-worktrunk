@@ -39,26 +39,6 @@ For local development from this repository:
 cargo install --path .
 ```
 
-### Upgrading an existing installation (including WSL)
-
-The original 0.1.0 executable printed absolute, unstyled paths. If the branch
-suffix disappears but colors, `~`, and repository truncation are missing, replace
-that executable with the current version. To install directly from GitHub:
-
-```sh
-cargo install --git https://github.com/Faria22/starship-worktrunk --locked --force
-starship-worktrunk --version
-```
-
-Version 0.1.1 and later support `--version`; the original executable prints a path
-even when passed that flag. `--force` also replaces earlier builds installed with
-the same package version.
-
-Run the install inside WSL for a WSL prompt. Use `type -a starship-worktrunk starship git`
-to check which executables the shell finds, and ensure the Linux binaries come
-before Windows executables or older copies on `PATH`. In Bash, run `hash -r` after
-replacing an executable. Keep `[directory]` enabled as shown below.
-
 ## Starship Configuration
 
 Requires `starship` and `git` on `PATH`. Keep your existing `[directory]` settings

@@ -104,6 +104,7 @@ cargo run
 ```
 
 Install Starship before running integration tests (CI uses 1.26.0).
+On Unix, the full-prompt tests also require Bash and Zsh.
 Run the checks used by CI:
 
 ```sh

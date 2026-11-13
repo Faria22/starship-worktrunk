@@ -1,6 +1,6 @@
 [package]
 name = "starship-worktrunk"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Faria"]
 description = "A Starship custom module that compacts Worktrunk branch suffixes in directory paths."

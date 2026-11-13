@@ -14,6 +14,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Install Zsh for prompt integration tests
+        run: sudo apt-get update && sudo apt-get install -y zsh
       - name: Install Starship for integration tests
         run: |
           curl -fsSL https://github.com/starship/starship/releases/download/v1.26.0/starship-x86_64-unknown-linux-musl.tar.gz -o /tmp/starship.tar.gz
